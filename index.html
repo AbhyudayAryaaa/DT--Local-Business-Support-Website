@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Artisan Marketplace</title>
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body{font-family:sans-serif;margin:0;padding:0;background:#f7f7f7;}
+header{background:#4CAF50;color:white;padding:10px 20px;display:flex;justify-content:space-between;align-items:center;}
+button{padding:6px 12px;margin:2px;cursor:pointer;border:none;border-radius:4px;background:#2196F3;color:white;transition:0.3s;}
+button:hover{background:#1976D2;}
+.prod{border:1px solid #ddd;padding:10px;margin:5px;border-radius:8px;background:white;transition:transform 0.3s;display:flex;flex-direction:column;align-items:center;}
+.prod:hover{transform:scale(1.03);}
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;justify-content:center;align-items:center;z-index:100;}
+.modal.open{display:flex;}
+.modal-content{background:white;padding:20px;border-radius:8px;max-width:500px;width:90%;max-height:90%;overflow:auto;}
+input,select,textarea{width:100%;margin:5px 0;padding:6px;}
+#productList,#artisanGrid{display:flex;flex-wrap:wrap;justify-content:center;}
+.small{font-size:0.8em;margin:2px 0;}
+#map{height:300px;margin:10px 0;}
+#userBadge{font-weight:bold;}
+.emoji-btn{font-size:1.5em;margin:2px;cursor:pointer;transition:0.2s;}
+.emoji-btn:hover{transform:scale(1.3);}
+.img-preview{width:100px;height:100px;object-fit:cover;margin:2px;border-radius:6px;}
+</style>
+</head>
+<body>
+<header>
+    <div>Artisan Marketplace</div>
+    <div>
+        <span id="userBadge"></span>
+        <button onclick="openAuth()">Sign In / Register</button>
+        <button onclick="openAdmin()">Admin</button>
+    </div>
+</header>
+
+<section id="dashboard" style="padding:10px;">
+    <h2>Upload Artisan Product</h2>
+    <input id="a_title" placeholder="Product title">
+    <input id="a_desc" placeholder="Description">
+    <input id="a_cat" placeholder="Category">
+    <input id="a_price" type="number" placeholder="Price">
+    <input type="file" id="a_photos" multiple onchange="handlePhotoUpload(event)">
+    <button onclick="saveArtisanProduct()">Upload</button>
+    <button onclick="useMyLocation()">Use My Location</button>
+
+    <h2>Products</h2>
+    <div id="productList"></div>
+
+    <h2>Map</h2>
+    <div id="map"></div>
+    <button onclick="findNearby()">Find Nearby Shops</button>
+    <button onclick="resetMap()">Reset Map</button>
+    <div id="nearList"></div>
+
+    <h2>Artisans</h2>
+    <div id="artisanGrid"></div>
+</section>
+
+<!-- Sign In / Register Modal -->
+<div class="modal" id="authModal">
+    <div class="modal-content">
+        <h3>Sign In</h3>
+        <input id="signin_user" placeholder="Username">
+        <input id="signin_pass" placeholder="Password" type="password">
+        <button onclick="doSignIn()">Sign In</button>
+        <h3>Register</h3>
+        <input id="reg_user" placeholder="Username">
+        <input id="reg_pass" placeholder="Password" type="password">
+        <select id="reg_role">
+            <option value="customer">Customer</option>
+            <option value="artisan">Artisan</option>
+        </select>
+        <button onclick="doRegister()">Register</button>
+        <button onclick="closeAuth()">Close</button>
+    </div>
+</div>
+
+<!-- Admin Modal -->
+<div class="modal" id="adminModal">
+    <div class="modal-content">
+        <h3>Admin Panel</h3>
+        <div><strong>Pending Artisan Verifications</strong></div>
+        <div id="pendingVerifications"></div>
+        <div><strong>All Users</strong></div>
+        <div id="allUsersList"></div>
+        <button onclick="closeAdmin()">Close</button>
+    </div>
+</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ---------- LocalStorage helpers ----------
+function getUsers(){return JSON.parse(localStorage.getItem('users')||'[]');}
+function saveUsers(users){localStorage.setItem('users',JSON.stringify(users));}
+function getProducts(){return JSON.parse(localStorage.getItem('products')||'[]');}
+function saveProducts(products){localStorage.setItem('products',JSON.stringify(products));}
+function getPurchases(){return JSON.parse(localStorage.getItem('purchases')||'[]');}
+function savePurchases(p){localStorage.setItem('purchases',JSON.stringify(p));}
+
+// ---------- Authentication ----------
+let currentUser = null;
+function openAuth(){document.getElementById('authModal').classList.add('open');}
+function closeAuth(){document.getElementById('authModal').classList.remove('open');}
+function doSignIn(){
+    const u=document.getElementById('signin_user').value.trim();
+    const p=document.getElementById('signin_pass').value;
+    const users=getUsers();
+    const user=users.find(x=>x.username===u && x.password===p);
+    if(user){currentUser=user; alert('Signed in as '+user.username); closeAuth(); updateUserBadge(); renderProducts();}
+    else alert('Invalid credentials');
+}
+function doRegister(){
+    const u=document.getElementById('reg_user').value.trim();
+    const p=document.getElementById('reg_pass').value;
+    const role=document.getElementById('reg_role').value;
+    if(!u||!p){alert('Enter username and password'); return;}
+    const users=getUsers();
+    if(users.find(x=>x.username===u)){alert('Username exists'); return;}
+    const newUser={username:u,password:p,role,verified: role==='customer'?true:false};
+    users.push(newUser); saveUsers(users);
+    alert('Registered successfully. '+(role==='artisan'?'Waiting admin verification':'You can login now.'));
+}
+function updateUserBadge(){
+    const badge=document.getElementById('userBadge');
+    badge.innerText=currentUser?`Hello, ${currentUser.username} (${currentUser.role})`:'';
+}
+
+// ---------- Admin ----------
+function openAdmin(){document.getElementById('adminModal').classList.add('open'); renderAdminPanel();}
+function closeAdmin(){document.getElementById('adminModal').classList.remove('open');}
+function renderAdminPanel(){
+    const users=getUsers();
+    const pendingDiv=document.getElementById('pendingVerifications'); pendingDiv.innerHTML='';
+    users.filter(u=>u.role==='artisan'&&!u.verified).forEach(u=>{
+        const div=document.createElement('div'); div.className='small';
+        div.innerHTML=`${u.username} <button onclick="verifyArtisan('${u.username}')">Verify</button>`;
+        pendingDiv.appendChild(div);
+    });
+    const allDiv=document.getElementById('allUsersList'); allDiv.innerHTML='';
+    users.forEach(u=>{
+        const div=document.createElement('div'); div.className='small';
+        div.innerText=`${u.username} • ${u.role} • ${u.verified?'Verified':'Pending'}`;
+        allDiv.appendChild(div);
+    });
+}
+function verifyArtisan(username){
+    const users=getUsers();
+    const user=users.find(u=>u.username===username);
+    if(user){user.verified=true; saveUsers(users); renderAdminPanel(); renderProducts(); alert(username+' verified!');}
+}
+
+// ---------- Product Upload ----------
+let uploadedImages=[];
+function handlePhotoUpload(event){
+    uploadedImages=[];
+    const files=event.target.files;
+    for(let f of files){
+        const reader=new FileReader();
+        reader.onload=e=>{uploadedImages.push(e.target.result);}
+        reader.readAsDataURL(f);
+    }
+}
+function useMyLocation(){
+    if(!navigator.geolocation){alert('Geolocation not supported'); return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+        const lat=pos.coords.latitude, lon=pos.coords.longitude;
+        alert('Location captured: '+lat+', '+lon);
+    });
+}
+function saveArtisanProduct(){
+    if(!currentUser || currentUser.role!=='artisan'){alert('Login as artisan to upload'); return;}
+    const products=getProducts();
+    const title=document.getElementById('a_title').value.trim();
+    const desc=document.getElementById('a_desc').value.trim();
+    const cat=document.getElementById('a_cat').value.trim();
+    const price=parseFloat(document.getElementById('a_price').value);
+    if(!title||!cat||isNaN(price)||uploadedImages.length==0){alert('Fill all fields and select at least 1 image'); return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+        const lat=pos.coords.latitude, lon=pos.coords.longitude;
+        const id=Date.now();
+        const prod={id,title,desc,category:cat,price,artisan:currentUser.username,images:uploadedImages,lat,lon,verified:currentUser.verified||false,reviews:[],buyers:[]};
+        products.push(prod); saveProducts(products);
+        alert('Product uploaded!');
+        uploadedImages=[];
+        renderProducts(); drawMarkers(); renderArtisans();
+    },()=>{alert('Location required');});
+}
+
+// ---------- Map ----------
+const map=L.map('map').setView([26.9124,75.7873],13);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+const markers=L.layerGroup().addTo(map);
+function drawMarkers(){
+    markers.clearLayers();
+    getProducts().forEach(p=>{
+        if(p.lat && p.lon){
+            const m=L.marker([p.lat,p.lon]).bindPopup(`<b>${p.title}</b><br>${p.artisan}<br>₹${p.price}`);
+            markers.addLayer(m);
+        }
+    });
+}
+function resetMap(){map.setView([26.9124,75.7873],13); document.getElementById('nearList').innerHTML='';}
+function findNearby(){
+    if(!navigator.geolocation){alert('Geolocation not supported'); return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+        const {latitude:lat,longitude:lon}=pos.coords;
+        map.setView([lat,lon],14);
+        let listHTML='';
+        getProducts().forEach(p=>{
+            if(p.lat && p.lon){
+                const dist=getDistance(lat,lon,p.lat,p.lon);
+                if(dist<5) listHTML+=`<div class="small">${p.artisan} (${p.title}) ~${dist.toFixed(2)} km</div>`;
+            }
+        });
+        document.getElementById('nearList').innerHTML=listHTML||'<div class="small">No shops nearby</div>';
+    });
+}
+function getDistance(lat1,lon1,lat2,lon2){
+    const R=6371;
+    const dLat=(lat2-lat1)*Math.PI/180;
+    const dLon=(lon2-lon1)*Math.PI/180;
+    const a=Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+    const c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    return R*c;
+}
+
+// ---------- Buy Product ----------
+function buyProduct(pid){
+    if(!currentUser || currentUser.role!=='customer'){alert('Login as customer to buy'); return;}
+    const products=getProducts();
+    const prod=products.find(p=>p.id===pid);
+    if(prod){
+        if(!prod.buyers) prod.buyers=[];
+        if(!prod.buyers.includes(currentUser.username)){
+            prod.buyers.push(currentUser.username);
+            saveProducts(products);
+            alert('Purchased '+prod.title+' successfully!');
+            renderProducts();
+        }else alert('You already bought this product.');
+    }
+}
+
+// ---------- Reviews ----------
+const emojis=['😀','🙂','😐','😞','😡'];
+function openProductReviewForm(pid){
+    if(!currentUser){alert('Login to review'); return;}
+    const products=getProducts();
+    const prod=products.find(p=>p.id===pid);
+    if(!prod){alert('Product not found'); return;}
+    if(!prod.buyers.includes(currentUser.username) && currentUser.role==='customer'){alert('You can review only purchased products'); return;}
+    let html='Choose Emoji:<br>';
+    emojis.forEach(e=>{html+=`<span class="emoji-btn" onclick="addReview(${pid},'${e}')">${e}</span>`;});
+    html+='<br>Comment:<br><textarea id="revComment"></textarea><br>';
+    if(currentUser.role==='customer' && prod.buyers.includes(currentUser.username)){
+        html+='<input type="file" id="revPhoto" onchange="revPhotoChange(event)"><br>';
+    }
+    const revModal=document.createElement('div');
+    revModal.className='modal open';
+    revModal.id='revModal';
+    revModal.innerHTML=`<div class="modal-content">${html}<button onclick="closeRevModal()">Close</button></div>`;
+    document.body.appendChild(revModal);
+}
+let reviewPhoto='';
+function revPhotoChange(event){
+    const file=event.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=e=>{reviewPhoto=e.target.result;}
+    reader.readAsDataURL(file);
+}
+function addReview(pid,emoji){
+    const comment=document.getElementById('revComment')?document.getElementById('revComment').value:'';
+    const products=getProducts();
+    const prod=products.find(p=>p.id===pid);
+    if(prod){
+        if(!prod.reviews) prod.reviews=[];
+        prod.reviews.push({user:currentUser.username,emoji,comment,photo:reviewPhoto});
+        reviewPhoto='';
+        saveProducts(products); renderProducts();
+        closeRevModal();
+        alert('Review added!');
+    }
+}
+function closeRevModal(){
+    const modal=document.getElementById('revModal');
+    if(modal) modal.remove();
+}
+
+// ---------- Render Products & Artisans ----------
+function renderProducts(){
+    const list=document.getElementById('productList'); list.innerHTML='';
+    getProducts().forEach(p=>{
+        const card=document.createElement('div'); card.className='prod';
+        let imgs='';
+        if(p.images && p.images.length>0){
+            imgs=p.images.map(i=>`<img src="${i}" class="img-preview">`).join('');
+        }
+        let revs='';
+        if(p.reviews && p.reviews.length>0){
+            revs='<div class="small">Reviews:<br>'+p.reviews.map(r=>`${r.user} ${r.emoji} ${r.comment || ''}${r.photo?'<br><img src="'+r.photo+'" class="img-preview">':''}`).join('<br>')+'</div>';
+        }
+        card.innerHTML=`${imgs}<br><b>${p.title}</b><div>${p.category}</div><div>₹${p.price}</div><div>By: ${p.artisan}</div>
+        <button onclick="openProductReviewForm(${p.id})">Review</button>
+        ${currentUser && currentUser.role==='customer'?'<button onclick="buyProduct('+p.id+')">Buy</button>':''}
+        ${revs}`;
+        list.appendChild(card);
+    });
+}
+function renderArtisans(){
+    const grid=document.getElementById('artisanGrid'); grid.innerHTML='';
+    const products=getProducts();
+    const artisans={};
+    products.forEach(p=>{
+        if(!artisans[p.artisan]) artisans[p.artisan]=[];
+        artisans[p.artisan].push(p);
+    });
+    for(const name in artisans){
+        const card=document.createElement('div'); card.className='prod';
+        card.innerHTML=`<b>${name}</b><div class="small">${artisans[name].length} products</div>`;
+        grid.appendChild(card);
+    }
+}
+
+// Initial render
+updateUserBadge(); renderProducts(); drawMarkers(); renderArtisans();
+</script>
+</body>
+</html>
+
